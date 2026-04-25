@@ -1,0 +1,18 @@
+.{
+    .name = .zlock,
+    .version = "0.1.0",
+    .fingerprint = 0xd38b4b61a9577ae9,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .clap = .{
+            .url = "git+https://github.com/hejsil/zig-clap#8d97efa1ee1e575443c7888d5c38e1c3fc145cf5",
+            .hash = "clap-0.12.0-oBajB7foAQDqlSwaSG5g0yq7xGbQARUsBk5T64gAOqP5",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+    },
+}
