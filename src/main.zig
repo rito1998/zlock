@@ -7,10 +7,13 @@ const log = std.log;
 
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
+const ArrayList = std.ArrayList;
+const Mutex = std.Io.Mutex;
 const IpAddress = Io.net.IpAddress;
 
 const Client = @import("Client.zig");
 const Server = @import("Server.zig");
+const Lock = @import("Lock.zig");
 
 const SubCommands = enum {
     lock,
@@ -31,7 +34,7 @@ const main_params = clap.parseParamsComptime(
 const MainArgs = clap.ResultEx(clap.Help, &main_params, main_parsers);
 
 pub fn main(init: process.Init) !void {
-    const arena = init.arena.allocator();
+    const arena = init.gpa;
     const io = init.io;
 
     var iter = try init.minimal.args.iterateAllocator(arena);
@@ -114,10 +117,16 @@ fn subCommandServer(allocator: Allocator, io: Io, iter: *process.Args.Iterator, 
         };
     }
 
+    // a list of locks
+    var locks = try ArrayList(Lock).initCapacity(allocator, 0);
+    var mutex = Mutex.init;
     const server: Server = .{
         .address = address,
+        .locks = &locks,
+        .mutex = &mutex,
     };
-    try server.start(io);
+
+    try server.start(allocator, io);
 }
 
 fn subCommandVersion(io: Io) !void {

@@ -2,7 +2,7 @@
     .name = .zlock,
     .version = "0.1.0",
     .fingerprint = 0xd38b4b61a9577ae9,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.16.0", //0.17.0-dev.101+4e2147d14
     .dependencies = .{
         .clap = .{
             .url = "git+https://github.com/hejsil/zig-clap#8d97efa1ee1e575443c7888d5c38e1c3fc145cf5",
