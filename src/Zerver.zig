@@ -1,4 +1,4 @@
-const Server = @This();
+const Zerver = @This();
 
 const std = @import("std");
 const net = std.Io.net;
@@ -18,12 +18,12 @@ address: IpAddress,
 locks: *ArrayList(Lock),
 mutex: *Mutex,
 
-pub fn format(self: *const Server, writer: *Writer) Writer.Error!void {
+pub fn format(self: *const Zerver, writer: *Writer) Writer.Error!void {
     try writer.print("zlock server at {f} ({d} locks)", .{ self.address, self.locks.items.len });
     try writer.flush();
 }
 
-pub fn logLocks(self: *const Server, io: Io) !void {
+pub fn logLocks(self: *const Zerver, io: Io) !void {
     if (self.locks.items.len > 0) {
         for (self.locks.items) |lock| {
             log.info("- {f} (expires in {d} seconds)", .{ lock, lock.expiration.toSeconds() - Timestamp.now(io, .real).toSeconds() });
@@ -33,7 +33,7 @@ pub fn logLocks(self: *const Server, io: Io) !void {
     }
 }
 
-pub fn start(self: *const Server, allocator: Allocator, io: Io) !void {
+pub fn start(self: *const Zerver, allocator: Allocator, io: Io) !void {
     var group = Io.Group.init;
     defer group.cancel(io);
 
@@ -53,11 +53,14 @@ pub fn start(self: *const Server, allocator: Allocator, io: Io) !void {
 // can be easily tested with netcat like so:
 // >> "create ExampleLockName" | ncat localhost 1998
 // >> "trylock ExampleLockName 10000" | ncat localhost 1998
-pub fn handleConnection(self: *const Server, allocator: Allocator, io: Io, connection: Stream) Io.Cancelable!void {
+pub fn handleConnection(self: *const Zerver, allocator: Allocator, io: Io, connection: Stream) Io.Cancelable!void {
     defer connection.close(io);
 
     var r_buff = [_]u8{0} ** 1024;
     var reader = connection.reader(io, &r_buff);
+
+    var w_buff = [_]u8{0} ** 1024;
+    var writer = connection.writer(io, &w_buff);
 
     const msg = reader.interface.takeDelimiterExclusive('\n') catch |err| {
         return switch (err) {
@@ -69,12 +72,8 @@ pub fn handleConnection(self: *const Server, allocator: Allocator, io: Io, conne
     };
     const trimmed_msg = std.mem.trim(u8, msg, "\r\n");
 
-    var reply: []const u8 = undefined;
-
     var iterator = std.mem.splitSequence(u8, trimmed_msg, " ");
     if (iterator.next()) |command| {
-        reply = "unknown command";
-
         try self.mutex.lock(io);
         defer self.mutex.unlock(io);
 
@@ -87,7 +86,8 @@ pub fn handleConnection(self: *const Server, allocator: Allocator, io: Io, conne
                     for (self.locks.items) |lock| {
                         if (lock.id == std.hash.Adler32.hash(name)) {
                             log.info("lock {s} already exists, denying create from {f}", .{ name, connection.socket.address });
-                            reply = "already exists";
+                            writer.interface.print("already exists\n", .{}) catch return Io.Cancelable.Canceled;
+                            writer.interface.flush() catch return Io.Cancelable.Canceled;
                             found = true;
                             break;
                         }
@@ -96,14 +96,15 @@ pub fn handleConnection(self: *const Server, allocator: Allocator, io: Io, conne
                 if (!found) {
                     const new_lock: Lock = .init(std.hash.Adler32.hash(name), .zero);
                     self.locks.append(allocator, new_lock) catch return Io.Cancelable.Canceled;
-                    reply = "created";
+                    writer.interface.print("created\n", .{}) catch return Io.Cancelable.Canceled;
+                    writer.interface.flush() catch return Io.Cancelable.Canceled;
                 }
             } else {
                 log.info("create command missing lock name from {f}", .{connection.socket.address});
-                reply = "error: create command missing lock name";
+                writer.interface.print("error: create command missing lock name\n", .{}) catch return Io.Cancelable.Canceled;
+                writer.interface.flush() catch return Io.Cancelable.Canceled;
             }
-        }
-        if (std.mem.eql(u8, command, "trylock")) {
+        } else if (std.mem.eql(u8, command, "trylock")) {
             if (iterator.next()) |name| {
                 if (iterator.next()) |expiration_ms_str| {
                     const expiration_ms = std.fmt.parseInt(i64, expiration_ms_str, 10) catch {
@@ -116,29 +117,34 @@ pub fn handleConnection(self: *const Server, allocator: Allocator, io: Io, conne
                         for (0..self.locks.items.len) |i| {
                             if (self.locks.items[i].id == std.hash.Adler32.hash(name)) {
                                 if (self.locks.items[i].state == .unlocked) {
-                                    reply = "granted";
+                                    writer.interface.print("granted\n", .{}) catch return Io.Cancelable.Canceled;
+                                    writer.interface.flush() catch return Io.Cancelable.Canceled;
                                     self.locks.items[i].lock(Timestamp.now(io, .real).addDuration(.fromMilliseconds(expiration_ms)));
                                 } else {
                                     log.info("lock {s} is already held, denying lock from {f}", .{ name, connection.socket.address });
 
-                                    reply = "denied";
+                                    writer.interface.print("denied\n", .{}) catch return Io.Cancelable.Canceled;
+                                    writer.interface.flush() catch return Io.Cancelable.Canceled;
                                 }
                             }
                         }
                     } else {
-                        reply = "not found";
+                        writer.interface.print("not found\n", .{}) catch return Io.Cancelable.Canceled;
+                        writer.interface.flush() catch return Io.Cancelable.Canceled;
                     }
                 } else {
                     log.info("trylock command missing expiration milliseconds from {f}", .{connection.socket.address});
-                    reply = "error: trylock command missing expiration milliseconds";
+                    writer.interface.print("error: trylock command missing expiration milliseconds\n", .{}) catch return Io.Cancelable.Canceled;
+                    writer.interface.flush() catch return Io.Cancelable.Canceled;
                 }
             } else {
                 log.info("trylock command missing lock name from {f}", .{connection.socket.address});
-                reply = "error: trylock command missing lock name";
+                writer.interface.print("error: trylock command missing lock name\n", .{}) catch return Io.Cancelable.Canceled;
+                writer.interface.flush() catch return Io.Cancelable.Canceled;
             }
         }
         // blocking version, block until the lock can be acquired
-        if (std.mem.eql(u8, command, "lock")) {
+        else if (std.mem.eql(u8, command, "lock")) {
             if (iterator.next()) |name| {
                 log.info("received lock command for {s} from {f}", .{ name, connection.socket.address });
 
@@ -150,7 +156,8 @@ pub fn handleConnection(self: *const Server, allocator: Allocator, io: Io, conne
                                 try io.sleep(.fromSeconds(1), .real);
                                 try self.mutex.lock(io);
                             }
-                            reply = "granted";
+                            writer.interface.print("granted\n", .{}) catch return Io.Cancelable.Canceled;
+                            writer.interface.flush() catch return Io.Cancelable.Canceled;
                             if (iterator.next()) |expiration_ms_str| {
                                 const expiration_ms = std.fmt.parseInt(i64, expiration_ms_str, 10) catch {
                                     log.info("lock command has invalid expiration '{s}' from {f}", .{ expiration_ms_str, connection.socket.address });
@@ -164,46 +171,50 @@ pub fn handleConnection(self: *const Server, allocator: Allocator, io: Io, conne
                         }
                     }
                 } else {
-                    reply = "not found";
+                    writer.interface.print("not found\n", .{}) catch return Io.Cancelable.Canceled;
+                    writer.interface.flush() catch return Io.Cancelable.Canceled;
                 }
             } else {
                 log.info("lock command missing lock name from {f}", .{connection.socket.address});
-                reply = "error: lock command missing lock name";
+                writer.interface.print("error: lock command missing lock name\n", .{}) catch return Io.Cancelable.Canceled;
+                writer.interface.flush() catch return Io.Cancelable.Canceled;
             }
-        }
-        if (std.mem.eql(u8, command, "unlock")) {
+        } else if (std.mem.eql(u8, command, "unlock")) {
             if (iterator.next()) |name| {
                 log.info("received unlock command for {s} from {f}", .{ name, connection.socket.address });
 
+                var found = false;
                 if (self.locks.items.len > 0) {
                     for (self.locks.items) |*lock| {
                         if (lock.id == std.hash.Adler32.hash(name)) {
                             lock.unlock();
-                            reply = "unlocked";
+                            writer.interface.print("unlocked\n", .{}) catch return Io.Cancelable.Canceled;
+                            writer.interface.flush() catch return Io.Cancelable.Canceled;
+                            found = true;
                         }
                     }
-                } else {
-                    reply = "not found";
+                }
+                if (!found) {
+                    writer.interface.print("not found\n", .{}) catch return Io.Cancelable.Canceled;
+                    writer.interface.flush() catch return Io.Cancelable.Canceled;
                 }
             } else {
                 log.info("unlock command missing lock name from {f}", .{connection.socket.address});
-                reply = "error: unlock command missing lock name";
+                writer.interface.print("error: unlock command missing lock name\n", .{}) catch return Io.Cancelable.Canceled;
+                writer.interface.flush() catch return Io.Cancelable.Canceled;
             }
         }
     } else {
         log.err("unknown command: {s} from {f}", .{ trimmed_msg, connection.socket.address });
+        writer.interface.print("unknown command\n", .{}) catch return Io.Cancelable.Canceled;
+        writer.interface.flush() catch return Io.Cancelable.Canceled;
     }
-
-    var w_buff = [_]u8{0} ** 1024;
-    var writer = connection.writer(io, &w_buff);
-    writer.interface.print("{s}\n", .{reply}) catch return Io.Cancelable.Canceled;
-    writer.interface.flush() catch return Io.Cancelable.Canceled;
 
     log.info("Closed the connection to {f}. Current server state: {f}", .{ connection.socket.address, self });
     try self.logLocks(io);
 }
 
-fn lockExpirationHandler(self: *const Server, io: Io) Io.Cancelable!void {
+fn lockExpirationHandler(self: *const Zerver, io: Io) Io.Cancelable!void {
     while (true) {
         try self.mutex.lock(io);
         defer self.mutex.unlock(io);

@@ -10,12 +10,13 @@ const Io = std.Io;
 const ArrayList = std.ArrayList;
 const Mutex = std.Io.Mutex;
 const IpAddress = Io.net.IpAddress;
+const Client = std.http.Client;
 
-const Client = @import("Client.zig");
-const Server = @import("Server.zig");
+const Zerver = @import("Zerver.zig");
 const Lock = @import("Lock.zig");
 
 const SubCommands = enum {
+    create,
     lock,
     trylock,
     unlock,
@@ -34,17 +35,17 @@ const main_params = clap.parseParamsComptime(
 const MainArgs = clap.ResultEx(clap.Help, &main_params, main_parsers);
 
 pub fn main(init: process.Init) !void {
-    const arena = init.gpa;
+    const gpa = init.gpa;
     const io = init.io;
 
-    var iter = try init.minimal.args.iterateAllocator(arena);
+    var iter = try init.minimal.args.iterateAllocator(gpa);
     defer iter.deinit();
     _ = iter.next();
 
     var diag = clap.Diagnostic{};
     var res = clap.parseEx(clap.Help, &main_params, main_parsers, &iter, .{
         .diagnostic = &diag,
-        .allocator = arena,
+        .allocator = gpa,
         .terminating_positional = 0,
     }) catch |err| {
         try diag.reportToFile(io, .stderr(), err);
@@ -58,28 +59,57 @@ pub fn main(init: process.Init) !void {
 
     const subcommand = res.positionals[0] orelse return subCommandHelp(io);
     switch (subcommand) {
-        .lock => try subCommandLock(io), // TODO
-        .trylock => try subCommandTryLock(io), // TODO
-        .unlock => try subCommandUnlock(io), // TODO
-        .server => try subCommandServer(arena, io, &iter, res), // TODO
+        .create => try subCommandCreate(gpa, io),
+        .lock => try subCommandLock(io),
+        .trylock => try subCommandTryLock(io),
+        .unlock => try subCommandUnlock(io),
+        .server => try subCommandServer(gpa, io, &iter, res),
         .version => try subCommandVersion(io),
         .help => try subCommandHelp(io),
     }
 }
 
+/// TODO
+fn subCommandCreate(allocator: Allocator, io: Io) !void {
+    log.err("subcommand not implemented", .{});
+
+    const hostname = try Io.net.HostName.init("localhost");
+
+    const stream = try hostname.connect(io, 1998, .{ .mode = .stream });
+    defer stream.close(io);
+
+    var buf_writer = [_]u8{0} ** 1024;
+    var writer = stream.writer(io, &buf_writer);
+
+    _ = try writer.interface.write("create A\n");
+    try writer.interface.flush();
+
+    var buf_reader = [_]u8{0} ** 1024;
+    var reader = stream.reader(io, &buf_reader);
+
+    const res = try reader.interface.allocRemainingAlignedSentinel(allocator, .unlimited, .of(u8), '\n');
+    defer allocator.free(res);
+
+    const res_trimmed = std.mem.trimEnd(u8, res, "\n");
+    try Io.File.stdout().writeStreamingAll(io, res_trimmed);
+}
+
+/// TODO
 fn subCommandLock(io: Io) !void {
     _ = io;
-    // TODO
+    log.err("subcommand not implemented", .{});
 }
 
+/// TODO
 fn subCommandTryLock(io: Io) !void {
     _ = io;
-    // TODO
+    log.err("subcommand not implemented", .{});
 }
 
+/// TODO
 fn subCommandUnlock(io: Io) !void {
     _ = io;
-    // TODO
+    log.err("subcommand not implemented", .{});
 }
 
 /// Start a zlock server
@@ -120,7 +150,7 @@ fn subCommandServer(allocator: Allocator, io: Io, iter: *process.Args.Iterator, 
     // a list of locks
     var locks = try ArrayList(Lock).initCapacity(allocator, 0);
     var mutex = Mutex.init;
-    const server: Server = .{
+    const server: Zerver = .{
         .address = address,
         .locks = &locks,
         .mutex = &mutex,
