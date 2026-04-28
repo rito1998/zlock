@@ -217,8 +217,6 @@ pub fn handleConnection(self: *const Zerver, allocator: Allocator, io: Io, conne
 fn lockExpirationHandler(self: *const Zerver, io: Io) Io.Cancelable!void {
     while (true) {
         try self.mutex.lock(io);
-        defer self.mutex.unlock(io);
-
         if (self.locks.items.len > 0) {
             for (self.locks.items) |*lock| {
                 if (lock.expiration.untilNow(io, .real).toMilliseconds() > 0) {
@@ -229,5 +227,8 @@ fn lockExpirationHandler(self: *const Zerver, io: Io) Io.Cancelable!void {
                 }
             }
         }
+        self.mutex.unlock(io);
+
+        try io.sleep(.fromMilliseconds(100), .real); // prevent busy waiting
     }
 }
