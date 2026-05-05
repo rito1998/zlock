@@ -1,6 +1,7 @@
 const Zerver = @This();
 
 const std = @import("std");
+const builtin = @import("builtin");
 const net = std.Io.net;
 const log = std.log;
 

@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // --------------------------- ZLOCK MODULE ---------------------------
-    // note: zlock module is created so that other projects can use it with zig fetch and @import("zwol").
+    // note: zlock module is created so that other projects can use it with zig fetch and @import("zlock").
     const zlock = b.addModule("zlock", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
