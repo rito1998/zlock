@@ -12,7 +12,7 @@ const Mutex = std.Io.Mutex;
 const IpAddress = Io.net.IpAddress;
 const Client = std.http.Client;
 
-const Zerver = @import("Zerver.zig");
+const ZlockServer = @import("ZlockServer.zig");
 const Lock = @import("Lock.zig");
 
 const SubCommands = enum {
@@ -150,7 +150,7 @@ fn subCommandServer(allocator: Allocator, io: Io, iter: *process.Args.Iterator, 
     // a list of locks
     var locks = try ArrayList(Lock).initCapacity(allocator, 0);
     var mutex = Mutex.init;
-    const server: Zerver = .{
+    const server: ZlockServer = .{
         .address = address,
         .locks = &locks,
         .mutex = &mutex,

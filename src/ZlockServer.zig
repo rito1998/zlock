@@ -1,7 +1,9 @@
-const Zerver = @This();
+const ZlockServer = @This();
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_zig_zon = @import("build_zig_zon");
+const Lock = @import("Lock.zig");
 const net = std.Io.net;
 const log = std.log;
 
@@ -10,7 +12,6 @@ const Io = std.Io;
 const Writer = Io.Writer;
 const IpAddress = net.IpAddress;
 const Stream = net.Stream;
-const Lock = @import("Lock.zig");
 const ArrayList = std.ArrayList;
 const Mutex = std.Io.Mutex;
 const Timestamp = Io.Timestamp;
@@ -19,22 +20,28 @@ address: IpAddress,
 locks: *ArrayList(Lock),
 mutex: *Mutex,
 
-pub fn format(self: *const Zerver, writer: *Writer) Writer.Error!void {
+pub fn format(self: *const ZlockServer, writer: *Writer) Writer.Error!void {
     try writer.print("zlock server at {f} ({d} locks)", .{ self.address, self.locks.items.len });
     try writer.flush();
 }
 
-pub fn logLocks(self: *const Zerver, io: Io) !void {
+pub fn logLocks(self: *const ZlockServer, io: Io) !void {
+    const now = Timestamp.now(io, .real);
+    log.info("-------------------- LOCKS --------------------", .{});
     if (self.locks.items.len > 0) {
         for (self.locks.items) |lock| {
-            log.info("- {f} (expires in {d} seconds)", .{ lock, lock.expiration.toSeconds() - Timestamp.now(io, .real).toSeconds() });
+            log.info("- {f} (expires in {d} seconds)", .{
+                lock,
+                lock.expiration.toSeconds() - now.toSeconds(),
+            });
         }
     } else {
         log.info("no locks", .{});
     }
+    log.info("-----------------------------------------------", .{});
 }
 
-pub fn start(self: *const Zerver, allocator: Allocator, io: Io) !void {
+pub fn start(self: *const ZlockServer, allocator: Allocator, io: Io) !void {
     var group = Io.Group.init;
     defer group.cancel(io);
 
@@ -54,7 +61,7 @@ pub fn start(self: *const Zerver, allocator: Allocator, io: Io) !void {
 // can be easily tested with netcat like so:
 // >> "create ExampleLockName" | ncat localhost 1998
 // >> "trylock ExampleLockName 10000" | ncat localhost 1998
-pub fn handleConnection(self: *const Zerver, allocator: Allocator, io: Io, connection: Stream) Io.Cancelable!void {
+pub fn handleConnection(self: *const ZlockServer, allocator: Allocator, io: Io, connection: Stream) Io.Cancelable!void {
     defer connection.close(io);
 
     var r_buff = [_]u8{0} ** 1024;
@@ -215,12 +222,12 @@ pub fn handleConnection(self: *const Zerver, allocator: Allocator, io: Io, conne
     try self.logLocks(io);
 }
 
-fn lockExpirationHandler(self: *const Zerver, io: Io) Io.Cancelable!void {
+fn lockExpirationHandler(self: *const ZlockServer, io: Io) Io.Cancelable!void {
     while (true) {
         try self.mutex.lock(io);
         if (self.locks.items.len > 0) {
             for (self.locks.items) |*lock| {
-                if (lock.expiration.untilNow(io, .real).toMilliseconds() > 0) {
+                if (lock.isExpired(.now(io, .real))) {
                     if (lock.state == .locked) {
                         log.warn("lock {d} expired, unlocking it", .{lock.id});
                         lock.unlock();
