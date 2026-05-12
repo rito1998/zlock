@@ -52,5 +52,5 @@ pub fn unlock(self: *Lock) void {
 }
 
 pub fn isExpired(self: *const Lock, now: Timestamp) bool {
-    return self.expiration.nanoseconds - now.nanoseconds < 0;
+    return now.durationTo(self.expiration).nanoseconds < 0;
 }
