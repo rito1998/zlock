@@ -150,9 +150,7 @@ pub fn handleConnection(self: *const ZlockServer, allocator: Allocator, io: Io, 
                 writer.interface.print("error: trylock command missing lock name\n", .{}) catch return Io.Cancelable.Canceled;
                 writer.interface.flush() catch return Io.Cancelable.Canceled;
             }
-        }
-        // blocking version, block until the lock can be acquired
-        else if (std.mem.eql(u8, command, "lock")) {
+        } else if (std.mem.eql(u8, command, "lock")) {
             if (iterator.next()) |name| {
                 log.info("received lock command for {s} from {f}", .{ name, connection.socket.address });
 
@@ -211,6 +209,10 @@ pub fn handleConnection(self: *const ZlockServer, allocator: Allocator, io: Io, 
                 writer.interface.print("error: unlock command missing lock name\n", .{}) catch return Io.Cancelable.Canceled;
                 writer.interface.flush() catch return Io.Cancelable.Canceled;
             }
+        } else if (std.mem.eql(u8, command, "version")) {
+            log.info("received version command from {f}", .{connection.socket.address});
+            writer.interface.print("{s}\n", .{build_zig_zon.version}) catch return Io.Cancelable.Canceled;
+            writer.interface.flush() catch return Io.Cancelable.Canceled;
         }
     } else {
         log.err("unknown command: {s} from {f}", .{ trimmed_msg, connection.socket.address });
