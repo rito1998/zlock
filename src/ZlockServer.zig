@@ -43,7 +43,7 @@ pub fn logLocks(self: *const ZlockServer, io: Io) !void {
         for (self.locks.items) |lock| {
             log.info("- {f} (expires in {d} seconds)", .{
                 lock,
-                lock.expiration.toSeconds() - now.toSeconds(),
+                now.durationTo(lock.expiration).toSeconds(),
             });
         }
     } else {
@@ -154,19 +154,12 @@ fn commandCreate(self: *const ZlockServer, allocator: Allocator, io: Io, args: *
         return Cancelable.Canceled;
     }
 
-    var found = false;
-    if (self.locks.items.len > 0) {
-        for (self.locks.items) |lock| {
-            if (lock.id == std.hash.Adler32.hash(lock_name)) {
-                log.info("lock {s} already exists, denying create from {f}", .{ lock_name, connection.socket.address });
-                writer.interface.print("already exists\n", .{}) catch return Cancelable.Canceled;
-                writer.interface.flush() catch return Cancelable.Canceled;
-                found = true;
-                break;
-            }
-        }
-    }
-    if (!found) {
+    const lock = self.getLockByName(lock_name);
+    if (lock != null) {
+        log.info("lock {s} already exists, denying create from {f}", .{ lock_name, connection.socket.address });
+        writer.interface.print("already exists\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.flush() catch return Cancelable.Canceled;
+    } else {
         const new_lock: Lock = .init(std.hash.Adler32.hash(lock_name), .zero);
         self.locks.append(allocator, new_lock) catch return Cancelable.Canceled;
         writer.interface.print("created\n", .{}) catch return Cancelable.Canceled;
