@@ -196,23 +196,20 @@ fn commandTrylock(self: *const ZlockServer, io: Io, args: *SplitIterator, connec
         return Cancelable.Canceled;
     }
 
-    if (self.locks.items.len > 0) {
-        for (0..self.locks.items.len) |i| {
-            if (self.locks.items[i].id == std.hash.Adler32.hash(lock_name)) {
-                if (self.locks.items[i].state == .unlocked) {
-                    writer.interface.print("granted\n", .{}) catch return Cancelable.Canceled;
-                    writer.interface.flush() catch return Cancelable.Canceled;
-                    self.locks.items[i].lock(Timestamp.now(io, .real).addDuration(.fromMilliseconds(expiration_ms)));
-                } else {
-                    log.info("lock {s} is already held, denying lock from {f}", .{ lock_name, connection.socket.address });
-
-                    writer.interface.print("denied\n", .{}) catch return Cancelable.Canceled;
-                    writer.interface.flush() catch return Cancelable.Canceled;
-                }
-            }
-        }
-    } else {
+    const lock = self.getLockByName(lock_name) orelse {
         writer.interface.print("not found\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.flush() catch return Cancelable.Canceled;
+        return Cancelable.Canceled;
+    };
+
+    if (lock.state == .unlocked) {
+        writer.interface.print("granted\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.flush() catch return Cancelable.Canceled;
+        lock.lock(Timestamp.now(io, .real).addDuration(.fromMilliseconds(expiration_ms)));
+    } else {
+        log.info("lock {s} is already held, denying lock from {f}", .{ lock_name, connection.socket.address });
+
+        writer.interface.print("denied\n", .{}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
     }
 }
@@ -246,23 +243,28 @@ fn commandLock(self: *const ZlockServer, io: Io, args: *SplitIterator, connectio
         return Cancelable.Canceled;
     }
 
-    if (self.locks.items.len > 0) {
-        for (0..self.locks.items.len) |i| {
-            if (self.locks.items[i].id == std.hash.Adler32.hash(lock_name)) {
-                while (self.locks.items[i].state == .locked) {
-                    self.mutex.unlock(io);
-                    try io.sleep(.fromSeconds(1), .real);
-                    try self.mutex.lock(io);
-                }
-                writer.interface.print("granted\n", .{}) catch return Io.Cancelable.Canceled;
-                writer.interface.flush() catch return Io.Cancelable.Canceled;
-                self.locks.items[i].lock(Timestamp.now(io, .real).addDuration(.fromMilliseconds(expiration_ms)));
-            }
-        }
-    } else {
+    var lock = self.getLockByName(lock_name) orelse {
         writer.interface.print("not found\n", .{}) catch return Io.Cancelable.Canceled;
         writer.interface.flush() catch return Io.Cancelable.Canceled;
+        return Io.Cancelable.Canceled;
+    };
+
+    while (lock.state == .locked) {
+        self.mutex.unlock(io);
+        try io.sleep(.fromMilliseconds(100), .real);
+        try self.mutex.lock(io);
+
+        // Re-resolve lock after releasing mutex, as the array may have moved.
+        lock = self.getLockByName(lock_name) orelse {
+            writer.interface.print("not found\n", .{}) catch return Io.Cancelable.Canceled;
+            writer.interface.flush() catch return Io.Cancelable.Canceled;
+            return Io.Cancelable.Canceled;
+        };
     }
+
+    writer.interface.print("granted\n", .{}) catch return Io.Cancelable.Canceled;
+    writer.interface.flush() catch return Io.Cancelable.Canceled;
+    lock.lock(Timestamp.now(io, .real).addDuration(.fromMilliseconds(expiration_ms)));
 }
 
 fn commandUnlock(self: *const ZlockServer, io: Io, args: *SplitIterator, connection: Stream) Cancelable!void {
@@ -279,21 +281,15 @@ fn commandUnlock(self: *const ZlockServer, io: Io, args: *SplitIterator, connect
         return Cancelable.Canceled;
     }
 
-    var found = false;
-    if (self.locks.items.len > 0) {
-        for (self.locks.items) |*lock| {
-            if (lock.id == std.hash.Adler32.hash(lock_name)) {
-                lock.unlock();
-                writer.interface.print("unlocked\n", .{}) catch return Cancelable.Canceled;
-                writer.interface.flush() catch return Cancelable.Canceled;
-                found = true;
-            }
-        }
-    }
-    if (!found) {
+    const lock = self.getLockByName(lock_name) orelse {
         writer.interface.print("not found\n", .{}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
-    }
+        return Cancelable.Canceled;
+    };
+
+    lock.unlock();
+    writer.interface.print("unlocked\n", .{}) catch return Cancelable.Canceled;
+    writer.interface.flush() catch return Cancelable.Canceled;
 }
 
 fn commandVersion(io: Io, connection: Stream) Cancelable!void {
@@ -310,10 +306,10 @@ fn commandHelp(io: Io, connection: Stream) Cancelable!void {
 
     const help_message =
         \\ Available commands:
-        \\ - create <lock_name>: creates a new lock, name is hashed to create a lock ID
-        \\ - lock <lock_name> <expiration_ms>: blocking
-        \\ - trylock <lock_name> <expiration_ms>: non-blocking
-        \\ - unlock <lock_name>
+        \\ - create <name>: creates a new lock, name is hashed to create a lock ID
+        \\ - lock <name> <expiration_ms>: blocking
+        \\ - trylock <name> <expiration_ms>: non-blocking
+        \\ - unlock <name>
         \\ - version
         \\ - help
     ;
