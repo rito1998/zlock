@@ -96,10 +96,10 @@ pub fn start(self: *const ZlockServer, allocator: Allocator, io: Io) !void {
 pub fn handleConnection(self: *const ZlockServer, allocator: Allocator, io: Io, connection: Stream) Cancelable!void {
     defer connection.close(io);
 
-    var r_buff = [_]u8{0} ** 1024;
+    var r_buff: [1024]u8 = undefined;
     var reader = connection.reader(io, &r_buff);
 
-    var w_buff = [_]u8{0} ** 1024;
+    var w_buff: [1024]u8 = undefined;
     var writer = connection.writer(io, &w_buff);
 
     const msg = reader.interface.takeDelimiterExclusive('\n') catch |err| {
@@ -141,7 +141,7 @@ pub fn handleConnection(self: *const ZlockServer, allocator: Allocator, io: Io, 
 }
 
 fn commandCreate(self: *const ZlockServer, allocator: Allocator, io: Io, args: *SplitIterator, connection: Stream) Cancelable!void {
-    var w_buff = [_]u8{0} ** 1024;
+    var w_buff: [1024]u8 = undefined;
     var writer = connection.writer(io, &w_buff);
 
     var lock_name: []const u8 = undefined;
@@ -168,7 +168,7 @@ fn commandCreate(self: *const ZlockServer, allocator: Allocator, io: Io, args: *
 }
 
 fn commandTrylock(self: *const ZlockServer, io: Io, args: *SplitIterator, connection: Stream) Cancelable!void {
-    var w_buff = [_]u8{0} ** 1024;
+    var w_buff: [1024]u8 = undefined;
     var writer = connection.writer(io, &w_buff);
 
     // expect lock name argument
@@ -215,7 +215,7 @@ fn commandTrylock(self: *const ZlockServer, io: Io, args: *SplitIterator, connec
 }
 
 fn commandLock(self: *const ZlockServer, io: Io, args: *SplitIterator, connection: Stream) Cancelable!void {
-    var w_buff = [_]u8{0} ** 1024;
+    var w_buff: [1024]u8 = undefined;
     var writer = connection.writer(io, &w_buff);
 
     // expect lock name argument
@@ -268,7 +268,7 @@ fn commandLock(self: *const ZlockServer, io: Io, args: *SplitIterator, connectio
 }
 
 fn commandUnlock(self: *const ZlockServer, io: Io, args: *SplitIterator, connection: Stream) Cancelable!void {
-    var w_buff = [_]u8{0} ** 1024;
+    var w_buff: [1024]u8 = undefined;
     var writer = connection.writer(io, &w_buff);
 
     var lock_name: []const u8 = undefined;
@@ -293,7 +293,7 @@ fn commandUnlock(self: *const ZlockServer, io: Io, args: *SplitIterator, connect
 }
 
 fn commandVersion(io: Io, connection: Stream) Cancelable!void {
-    var w_buff = [_]u8{0} ** 1024;
+    var w_buff: [1024]u8 = undefined;
     var writer = connection.writer(io, &w_buff);
 
     writer.interface.print("{s}\n", .{build_zig_zon.version}) catch return Cancelable.Canceled;
@@ -301,7 +301,7 @@ fn commandVersion(io: Io, connection: Stream) Cancelable!void {
 }
 
 fn commandHelp(io: Io, connection: Stream) Cancelable!void {
-    var w_buff = [_]u8{0} ** 1024;
+    var w_buff: [1024]u8 = undefined;
     var writer = connection.writer(io, &w_buff);
 
     const help_message =
