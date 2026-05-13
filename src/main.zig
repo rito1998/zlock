@@ -12,7 +12,7 @@ const Mutex = std.Io.Mutex;
 const IpAddress = Io.net.IpAddress;
 const Client = std.http.Client;
 
-const Zerver = @import("Zerver.zig");
+const ZlockServer = @import("ZlockServer.zig");
 const Lock = @import("Lock.zig");
 
 const SubCommands = enum {
@@ -78,14 +78,14 @@ fn subCommandCreate(allocator: Allocator, io: Io) !void {
     const stream = try hostname.connect(io, 1998, .{ .mode = .stream });
     defer stream.close(io);
 
-    var buf_writer = [_]u8{0} ** 1024;
-    var writer = stream.writer(io, &buf_writer);
+    var w_buff: [1024]u8 = undefined;
+    var writer = stream.writer(io, &w_buff);
 
     _ = try writer.interface.write("create A\n");
     try writer.interface.flush();
 
-    var buf_reader = [_]u8{0} ** 1024;
-    var reader = stream.reader(io, &buf_reader);
+    var r_buff: [1024]u8 = undefined;
+    var reader = stream.reader(io, &r_buff);
 
     const res = try reader.interface.allocRemainingAlignedSentinel(allocator, .unlimited, .of(u8), '\n');
     defer allocator.free(res);
@@ -150,7 +150,7 @@ fn subCommandServer(allocator: Allocator, io: Io, iter: *process.Args.Iterator, 
     // a list of locks
     var locks = try ArrayList(Lock).initCapacity(allocator, 0);
     var mutex = Mutex.init;
-    const server: Zerver = .{
+    const server: ZlockServer = .{
         .address = address,
         .locks = &locks,
         .mutex = &mutex,
