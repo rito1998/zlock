@@ -31,6 +31,18 @@ const Command = enum {
     help,
 };
 
+const Response = enum {
+    unknown_command,
+    missing_lock_name,
+    missing_expiration_milliseconds,
+    created,
+    granted,
+    denied,
+    unlocked,
+    not_found,
+    already_exists,
+};
+
 pub fn format(self: *const ZlockServer, writer: *Writer) Writer.Error!void {
     try writer.print("zlock server at {f} ({d} locks)", .{ self.address, self.locks.items.len });
     try writer.flush();
@@ -121,7 +133,7 @@ pub fn handleConnection(self: *const ZlockServer, allocator: Allocator, io: Io, 
 
         const command = std.meta.stringToEnum(Command, param) orelse {
             log.err("unknown command \"{s}\" from {f}", .{ param, connection.socket.address });
-            writer.interface.print("unknown command \"{s}\"\n", .{param}) catch return Cancelable.Canceled;
+            writer.interface.print("{s}\n", .{@tagName(Response.unknown_command)}) catch return Cancelable.Canceled;
             writer.interface.flush() catch return Cancelable.Canceled;
             return Cancelable.Canceled;
         };
@@ -149,7 +161,7 @@ fn commandCreate(self: *const ZlockServer, allocator: Allocator, io: Io, args: *
         lock_name = arg;
     } else {
         log.info("missing lock name from {f}", .{connection.socket.address});
-        writer.interface.print("error: missing lock name\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(Response.missing_lock_name)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     }
@@ -157,12 +169,12 @@ fn commandCreate(self: *const ZlockServer, allocator: Allocator, io: Io, args: *
     const lock = self.getLockByName(lock_name);
     if (lock != null) {
         log.info("lock {s} already exists, denying create from {f}", .{ lock_name, connection.socket.address });
-        writer.interface.print("already exists\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(Response.already_exists)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
     } else {
         const new_lock: Lock = .init(std.hash.Adler32.hash(lock_name), .zero);
         self.locks.append(allocator, new_lock) catch return Cancelable.Canceled;
-        writer.interface.print("created\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(Response.created)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
     }
 }
@@ -177,7 +189,7 @@ fn commandTrylock(self: *const ZlockServer, io: Io, args: *SplitIterator, connec
         lock_name = arg;
     } else {
         log.info("missing lock name from {f}", .{connection.socket.address});
-        writer.interface.print("error: missing lock name\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(Response.missing_lock_name)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     }
@@ -191,25 +203,25 @@ fn commandTrylock(self: *const ZlockServer, io: Io, args: *SplitIterator, connec
         };
     } else {
         log.info("missing expiration milliseconds from {f}", .{connection.socket.address});
-        writer.interface.print("error: missing expiration milliseconds\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(Response.missing_expiration_milliseconds)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     }
 
     const lock = self.getLockByName(lock_name) orelse {
-        writer.interface.print("not found\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(Response.not_found)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     };
 
     if (lock.state == .unlocked) {
-        writer.interface.print("granted\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(Response.granted)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         lock.lock(Timestamp.now(io, .real).addDuration(.fromMilliseconds(expiration_ms)));
     } else {
         log.info("lock {s} is already held, denying lock from {f}", .{ lock_name, connection.socket.address });
 
-        writer.interface.print("denied\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(Response.denied)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
     }
 }
@@ -224,7 +236,7 @@ fn commandLock(self: *const ZlockServer, io: Io, args: *SplitIterator, connectio
         lock_name = arg;
     } else {
         log.info("missing lock name from {f}", .{connection.socket.address});
-        writer.interface.print("error: missing lock name\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(Response.missing_lock_name)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     }
@@ -238,13 +250,13 @@ fn commandLock(self: *const ZlockServer, io: Io, args: *SplitIterator, connectio
         };
     } else {
         log.info("missing expiration milliseconds from {f}", .{connection.socket.address});
-        writer.interface.print("error: missing expiration milliseconds\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(Response.missing_expiration_milliseconds)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     }
 
     var lock = self.getLockByName(lock_name) orelse {
-        writer.interface.print("not found\n", .{}) catch return Io.Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(Response.not_found)}) catch return Io.Cancelable.Canceled;
         writer.interface.flush() catch return Io.Cancelable.Canceled;
         return Io.Cancelable.Canceled;
     };
@@ -256,13 +268,13 @@ fn commandLock(self: *const ZlockServer, io: Io, args: *SplitIterator, connectio
 
         // Re-resolve lock after releasing mutex, as the array may have moved.
         lock = self.getLockByName(lock_name) orelse {
-            writer.interface.print("not found\n", .{}) catch return Io.Cancelable.Canceled;
+            writer.interface.print("{s}\n", .{@tagName(Response.not_found)}) catch return Io.Cancelable.Canceled;
             writer.interface.flush() catch return Io.Cancelable.Canceled;
             return Io.Cancelable.Canceled;
         };
     }
 
-    writer.interface.print("granted\n", .{}) catch return Io.Cancelable.Canceled;
+    writer.interface.print("{s}\n", .{@tagName(Response.granted)}) catch return Io.Cancelable.Canceled;
     writer.interface.flush() catch return Io.Cancelable.Canceled;
     lock.lock(Timestamp.now(io, .real).addDuration(.fromMilliseconds(expiration_ms)));
 }
@@ -276,19 +288,19 @@ fn commandUnlock(self: *const ZlockServer, io: Io, args: *SplitIterator, connect
         lock_name = arg;
     } else {
         log.info("missing lock name from {f}", .{connection.socket.address});
-        writer.interface.print("error: missing lock name\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(Response.missing_lock_name)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     }
 
     const lock = self.getLockByName(lock_name) orelse {
-        writer.interface.print("not found\n", .{}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(Response.not_found)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     };
 
     lock.unlock();
-    writer.interface.print("unlocked\n", .{}) catch return Cancelable.Canceled;
+    writer.interface.print("{s}\n", .{@tagName(Response.unlocked)}) catch return Cancelable.Canceled;
     writer.interface.flush() catch return Cancelable.Canceled;
 }
 
