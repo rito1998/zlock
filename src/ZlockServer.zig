@@ -7,6 +7,10 @@ const Lock = @import("Lock.zig");
 const net = std.Io.net;
 const log = std.log;
 
+// here the command-line argument parser is used in the server to parse
+// incoming commands via tcp stream from clients like if they were using a CLI application.
+const clap = @import("clap");
+
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const Cancelable = Io.Cancelable;
@@ -22,7 +26,7 @@ address: IpAddress,
 locks: *ArrayList(Lock),
 mutex: *Mutex,
 
-const Command = enum {
+const command = enum {
     create,
     lock,
     trylock,
@@ -31,7 +35,16 @@ const Command = enum {
     help,
 };
 
-const Response = enum {
+const clap_main_parsers = .{
+    .command = clap.parsers.enumeration(command),
+};
+const clap_main_params = clap.parseParamsComptime(
+    \\-h, --help   Display this help and exit.
+    \\<command>
+    \\
+);
+
+const response = enum {
     unknown_command,
     missing_lock_name,
     missing_expiration_milliseconds,
@@ -65,7 +78,7 @@ pub fn logLocks(self: *const ZlockServer, io: Io) !void {
 }
 
 // expiration is better checked lazily right when a lock is accessed with isLocked(now),
-// but such dirty "polling" expiration handler can help with initial debugging
+// dirty polling expiration handler
 fn lockExpirationHandler(self: *const ZlockServer, io: Io) Cancelable!void {
     while (true) {
         try self.mutex.lock(io);
@@ -126,55 +139,90 @@ pub fn handleConnection(self: *const ZlockServer, allocator: Allocator, io: Io, 
 
     log.info("Received \"{s}\" from {f}", .{ trimmed_msg, connection.socket.address });
 
-    var iterator = std.mem.splitSequence(u8, trimmed_msg, " ");
-    if (iterator.next()) |param| {
-        try self.mutex.lock(io);
-        defer self.mutex.unlock(io);
+    // here parse received message with clap like for a CLI application
+    var iter = std.mem.splitSequence(u8, trimmed_msg, " ");
 
-        const command = std.meta.stringToEnum(Command, param) orelse {
-            log.err("unknown command \"{s}\" from {f}", .{ param, connection.socket.address });
-            writer.interface.print("{s}\n", .{@tagName(Response.unknown_command)}) catch return Cancelable.Canceled;
-            writer.interface.flush() catch return Cancelable.Canceled;
-            return Cancelable.Canceled;
-        };
+    var diag = clap.Diagnostic{};
+    var res = clap.parseEx(clap.Help, &clap_main_params, clap_main_parsers, &iter, .{
+        .diagnostic = &diag,
+        .allocator = allocator,
+        .terminating_positional = 0,
+    }) catch |err| {
+        diag.reportToFile(io, .stderr(), err) catch return Cancelable.Canceled;
+        log.err("unknown command from {f}", .{connection.socket.address});
+        writer.interface.print("{s}\n", .{@tagName(response.unknown_command)}) catch return Cancelable.Canceled;
+        writer.interface.flush() catch return Cancelable.Canceled;
+        return Cancelable.Canceled;
+    };
+    defer res.deinit();
 
-        switch (command) {
-            .create => try self.commandCreate(allocator, io, &iterator, connection),
-            .trylock => try self.commandTrylock(io, &iterator, connection),
-            .lock => try self.commandLock(io, &iterator, connection),
-            .unlock => try self.commandUnlock(io, &iterator, connection),
-            .version => try commandVersion(io, connection),
-            .help => try commandHelp(io, connection),
-        }
+    if (res.positionals.len == 0) {
+        try commandHelp(io, connection);
+    }
+
+    const cmd = res.positionals[0] orelse return commandHelp(io, connection);
+
+    try self.mutex.lock(io);
+    defer self.mutex.unlock(io);
+
+    switch (cmd) {
+        .create => try self.commandCreate(allocator, io, &iter, connection),
+        .trylock => try self.commandTrylock(io, &iter, connection),
+        .lock => try self.commandLock(io, &iter, connection),
+        .unlock => try self.commandUnlock(io, &iter, connection),
+        .version => try commandVersion(io, connection),
+        .help => try commandHelp(io, connection),
     }
 
     log.info("Closed the connection to {f}. Current server state: {f}", .{ connection.socket.address, self });
     try self.logLocks(io);
 }
 
-fn commandCreate(self: *const ZlockServer, allocator: Allocator, io: Io, args: *SplitIterator, connection: Stream) Cancelable!void {
+fn commandCreate(self: *const ZlockServer, allocator: Allocator, io: Io, iter: *SplitIterator, connection: Stream) Cancelable!void {
     var w_buff: [1024]u8 = undefined;
     var writer = connection.writer(io, &w_buff);
 
-    var lock_name: []const u8 = undefined;
-    if (args.next()) |arg| {
-        lock_name = arg;
-    } else {
-        log.info("missing lock name from {f}", .{connection.socket.address});
-        writer.interface.print("{s}\n", .{@tagName(Response.missing_lock_name)}) catch return Cancelable.Canceled;
+    // argparse
+
+    const clap_params = comptime clap.parseParamsComptime(
+        \\<str>               Lock name.
+        \\--help              Display this help and exit.
+    );
+
+    var diag = clap.Diagnostic{};
+    var res = clap.parseEx(clap.Help, &clap_params, clap.parsers.default, iter, .{
+        .diagnostic = &diag,
+        .allocator = allocator,
+    }) catch |err| {
+        diag.reportToFile(io, .stderr(), err) catch return Cancelable.Canceled;
+        return Cancelable.Canceled;
+    };
+    defer res.deinit();
+
+    const help_message = "some help message";
+
+    if (res.args.help != 0) {
+        writer.interface.print("{s}\n", .{help_message}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     }
 
+    const lock_name = res.positionals[0] orelse {
+        log.info("missing lock name from {f}", .{connection.socket.address});
+        writer.interface.print("{s}\n", .{@tagName(response.missing_lock_name)}) catch return Cancelable.Canceled;
+        writer.interface.flush() catch return Cancelable.Canceled;
+        return Cancelable.Canceled;
+    };
+
     const lock = self.getLockByName(lock_name);
     if (lock != null) {
         log.info("lock {s} already exists, denying create from {f}", .{ lock_name, connection.socket.address });
-        writer.interface.print("{s}\n", .{@tagName(Response.already_exists)}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(response.already_exists)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
     } else {
         const new_lock: Lock = .init(std.hash.Adler32.hash(lock_name), .zero);
         self.locks.append(allocator, new_lock) catch return Cancelable.Canceled;
-        writer.interface.print("{s}\n", .{@tagName(Response.created)}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(response.created)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
     }
 }
@@ -189,7 +237,7 @@ fn commandTrylock(self: *const ZlockServer, io: Io, args: *SplitIterator, connec
         lock_name = arg;
     } else {
         log.info("missing lock name from {f}", .{connection.socket.address});
-        writer.interface.print("{s}\n", .{@tagName(Response.missing_lock_name)}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(response.missing_lock_name)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     }
@@ -203,25 +251,25 @@ fn commandTrylock(self: *const ZlockServer, io: Io, args: *SplitIterator, connec
         };
     } else {
         log.info("missing expiration milliseconds from {f}", .{connection.socket.address});
-        writer.interface.print("{s}\n", .{@tagName(Response.missing_expiration_milliseconds)}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(response.missing_expiration_milliseconds)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     }
 
     const lock = self.getLockByName(lock_name) orelse {
-        writer.interface.print("{s}\n", .{@tagName(Response.not_found)}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(response.not_found)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     };
 
     if (lock.state == .unlocked) {
-        writer.interface.print("{s}\n", .{@tagName(Response.granted)}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(response.granted)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         lock.lock(Timestamp.now(io, .real).addDuration(.fromMilliseconds(expiration_ms)));
     } else {
         log.info("lock {s} is already held, denying lock from {f}", .{ lock_name, connection.socket.address });
 
-        writer.interface.print("{s}\n", .{@tagName(Response.denied)}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(response.denied)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
     }
 }
@@ -236,7 +284,7 @@ fn commandLock(self: *const ZlockServer, io: Io, args: *SplitIterator, connectio
         lock_name = arg;
     } else {
         log.info("missing lock name from {f}", .{connection.socket.address});
-        writer.interface.print("{s}\n", .{@tagName(Response.missing_lock_name)}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(response.missing_lock_name)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     }
@@ -250,13 +298,13 @@ fn commandLock(self: *const ZlockServer, io: Io, args: *SplitIterator, connectio
         };
     } else {
         log.info("missing expiration milliseconds from {f}", .{connection.socket.address});
-        writer.interface.print("{s}\n", .{@tagName(Response.missing_expiration_milliseconds)}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(response.missing_expiration_milliseconds)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     }
 
     var lock = self.getLockByName(lock_name) orelse {
-        writer.interface.print("{s}\n", .{@tagName(Response.not_found)}) catch return Io.Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(response.not_found)}) catch return Io.Cancelable.Canceled;
         writer.interface.flush() catch return Io.Cancelable.Canceled;
         return Io.Cancelable.Canceled;
     };
@@ -268,13 +316,13 @@ fn commandLock(self: *const ZlockServer, io: Io, args: *SplitIterator, connectio
 
         // Re-resolve lock after releasing mutex, as the array may have moved.
         lock = self.getLockByName(lock_name) orelse {
-            writer.interface.print("{s}\n", .{@tagName(Response.not_found)}) catch return Io.Cancelable.Canceled;
+            writer.interface.print("{s}\n", .{@tagName(response.not_found)}) catch return Io.Cancelable.Canceled;
             writer.interface.flush() catch return Io.Cancelable.Canceled;
             return Io.Cancelable.Canceled;
         };
     }
 
-    writer.interface.print("{s}\n", .{@tagName(Response.granted)}) catch return Io.Cancelable.Canceled;
+    writer.interface.print("{s}\n", .{@tagName(response.granted)}) catch return Io.Cancelable.Canceled;
     writer.interface.flush() catch return Io.Cancelable.Canceled;
     lock.lock(Timestamp.now(io, .real).addDuration(.fromMilliseconds(expiration_ms)));
 }
@@ -288,19 +336,19 @@ fn commandUnlock(self: *const ZlockServer, io: Io, args: *SplitIterator, connect
         lock_name = arg;
     } else {
         log.info("missing lock name from {f}", .{connection.socket.address});
-        writer.interface.print("{s}\n", .{@tagName(Response.missing_lock_name)}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(response.missing_lock_name)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     }
 
     const lock = self.getLockByName(lock_name) orelse {
-        writer.interface.print("{s}\n", .{@tagName(Response.not_found)}) catch return Cancelable.Canceled;
+        writer.interface.print("{s}\n", .{@tagName(response.not_found)}) catch return Cancelable.Canceled;
         writer.interface.flush() catch return Cancelable.Canceled;
         return Cancelable.Canceled;
     };
 
     lock.unlock();
-    writer.interface.print("{s}\n", .{@tagName(Response.unlocked)}) catch return Cancelable.Canceled;
+    writer.interface.print("{s}\n", .{@tagName(response.unlocked)}) catch return Cancelable.Canceled;
     writer.interface.flush() catch return Cancelable.Canceled;
 }
 
