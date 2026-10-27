@@ -178,19 +178,16 @@ pub fn handleConnection(self: *const ZlockServer, allocator: Allocator, io: Io, 
     try self.logLocks(io);
 }
 
-fn commandCreate(self: *const ZlockServer, allocator: Allocator, io: Io, iter: *SplitIterator, connection: Stream) Cancelable!void {
+fn commandCreate(self: *const ZlockServer, allocator: Allocator, io: Io, args: *SplitIterator, connection: Stream) Cancelable!void {
     var w_buff: [1024]u8 = undefined;
     var writer = connection.writer(io, &w_buff);
 
-    // argparse
-
     const clap_params = comptime clap.parseParamsComptime(
         \\<str>               Lock name.
-        \\--help              Display this help and exit.
     );
 
     var diag = clap.Diagnostic{};
-    var res = clap.parseEx(clap.Help, &clap_params, clap.parsers.default, iter, .{
+    var res = clap.parseEx(clap.Help, &clap_params, clap.parsers.default, args, .{
         .diagnostic = &diag,
         .allocator = allocator,
     }) catch |err| {
@@ -198,14 +195,6 @@ fn commandCreate(self: *const ZlockServer, allocator: Allocator, io: Io, iter: *
         return Cancelable.Canceled;
     };
     defer res.deinit();
-
-    const help_message = "some help message";
-
-    if (res.args.help != 0) {
-        writer.interface.print("{s}\n", .{help_message}) catch return Cancelable.Canceled;
-        writer.interface.flush() catch return Cancelable.Canceled;
-        return Cancelable.Canceled;
-    }
 
     const lock_name = res.positionals[0] orelse {
         log.info("missing lock name from {f}", .{connection.socket.address});
