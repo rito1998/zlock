@@ -15,7 +15,7 @@ const Client = std.http.Client;
 const ZlockServer = @import("ZlockServer.zig");
 const Lock = @import("Lock.zig");
 
-const SubCommands = enum {
+const commands = enum {
     create,
     lock,
     trylock,
@@ -24,15 +24,14 @@ const SubCommands = enum {
     version,
     help,
 };
-const main_parsers = .{
-    .command = clap.parsers.enumeration(SubCommands),
+const clap_main_parsers = .{
+    .command = clap.parsers.enumeration(commands),
 };
-const main_params = clap.parseParamsComptime(
+const clap_main_params = clap.parseParamsComptime(
     \\-h, --help   Display this help and exit.
     \\<command>
     \\
 );
-const MainArgs = clap.ResultEx(clap.Help, &main_params, main_parsers);
 
 pub fn main(init: process.Init) !void {
     const gpa = init.gpa;
@@ -43,35 +42,35 @@ pub fn main(init: process.Init) !void {
     _ = iter.next();
 
     var diag = clap.Diagnostic{};
-    var res = clap.parseEx(clap.Help, &main_params, main_parsers, &iter, .{
+    var res = clap.parseEx(clap.Help, &clap_main_params, clap_main_parsers, &iter, .{
         .diagnostic = &diag,
         .allocator = gpa,
         .terminating_positional = 0,
     }) catch |err| {
         try diag.reportToFile(io, .stderr(), err);
-        return subCommandHelp(io);
+        return commandHelp(io);
     };
     defer res.deinit();
 
     if (res.positionals.len == 0) {
-        return subCommandHelp(io);
+        return commandHelp(io);
     }
 
-    const subcommand = res.positionals[0] orelse return subCommandHelp(io);
-    switch (subcommand) {
-        .create => try subCommandCreate(gpa, io),
-        .lock => try subCommandLock(io),
-        .trylock => try subCommandTryLock(io),
-        .unlock => try subCommandUnlock(io),
-        .server => try subCommandServer(gpa, io, &iter, res),
-        .version => try subCommandVersion(io),
-        .help => try subCommandHelp(io),
+    const cmd = res.positionals[0] orelse return commandHelp(io);
+    switch (cmd) {
+        .create => try commandCreate(gpa, io),
+        .lock => try commandLock(io),
+        .trylock => try commandTryLock(io),
+        .unlock => try commandUnlock(io),
+        .server => try commandServer(gpa, io, &iter),
+        .version => try commandVersion(io),
+        .help => try commandHelp(io),
     }
 }
 
 /// TODO
-fn subCommandCreate(allocator: Allocator, io: Io) !void {
-    log.err("subcommand not implemented", .{});
+fn commandCreate(allocator: Allocator, io: Io) !void {
+    log.err("command not implemented", .{});
 
     const hostname = try Io.net.HostName.init("localhost");
 
@@ -95,27 +94,25 @@ fn subCommandCreate(allocator: Allocator, io: Io) !void {
 }
 
 /// TODO
-fn subCommandLock(io: Io) !void {
+fn commandLock(io: Io) !void {
     _ = io;
-    log.err("subcommand not implemented", .{});
+    log.err("command not implemented", .{});
 }
 
 /// TODO
-fn subCommandTryLock(io: Io) !void {
+fn commandTryLock(io: Io) !void {
     _ = io;
-    log.err("subcommand not implemented", .{});
+    log.err("command not implemented", .{});
 }
 
 /// TODO
-fn subCommandUnlock(io: Io) !void {
+fn commandUnlock(io: Io) !void {
     _ = io;
-    log.err("subcommand not implemented", .{});
+    log.err("command not implemented", .{});
 }
 
 /// Start a zlock server
-fn subCommandServer(allocator: Allocator, io: Io, iter: *process.Args.Iterator, main_args: MainArgs) !void {
-    _ = main_args;
-
+fn commandServer(allocator: Allocator, io: Io, iter: *process.Args.Iterator) !void {
     const params = comptime clap.parseParamsComptime(
         \\--address <str>     IpAddress to bind to. Defaults to [::1]:1998 or 0.0.0.0:1998.
         \\--help              Display this help and exit.
@@ -131,7 +128,7 @@ fn subCommandServer(allocator: Allocator, io: Io, iter: *process.Args.Iterator, 
     };
     defer res.deinit();
 
-    const help_message = "help for server subcommand\n"; // TODO
+    const help_message = "help for server command\n"; // TODO
 
     if (res.args.help != 0)
         return try Io.File.stdout().writeStreamingAll(io, help_message);
@@ -159,13 +156,13 @@ fn subCommandServer(allocator: Allocator, io: Io, iter: *process.Args.Iterator, 
     try server.start(allocator, io);
 }
 
-fn subCommandVersion(io: Io) !void {
+fn commandVersion(io: Io) !void {
     const version = comptime try std.SemanticVersion.parse(build_zig_zon.version);
     const version_string = std.fmt.comptimePrint("{f}\n", .{version});
     try Io.File.stdout().writeStreamingAll(io, version_string);
 }
 
-fn subCommandHelp(io: Io) !void {
+fn commandHelp(io: Io) !void {
     const message =
         \\TODO
     ;
